@@ -6,3 +6,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+# mio = "0.8" # Async I/O for net and other things, might not be needed, see std::net instead
+rustls = "0.20"
+opaque-ke = "2"
