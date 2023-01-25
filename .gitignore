@@ -1,1 +1,3 @@
 /target
+/openssl/rootCA.*
+/openssl/server.*
