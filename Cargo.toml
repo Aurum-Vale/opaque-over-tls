@@ -8,4 +8,6 @@ edition = "2021"
 [dependencies]
 # mio = "0.8" # Async I/O for net and other things, might not be needed, see std::net instead
 rustls = "0.20"
+rustls-pemfile = "1"
+x509-parser = "0.14"
 opaque-ke = "2"
