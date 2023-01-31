@@ -5,7 +5,7 @@ openssl req -x509 \
             -sha256 -days 356 \
             -nodes \
             -newkey rsa:2048 \
-            -subj "/CN=localhost/C=FR/L=Limoges" \
+            -subj "/CN=ca.localhost/C=FR/L=Limoges" \
             -keyout rootCA.key -out rootCA.crt
 
 
