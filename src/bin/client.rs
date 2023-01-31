@@ -1,7 +1,7 @@
 use std::{
     fs,
-    io::{BufReader, Read, Write},
-    net::{IpAddr, Ipv4Addr, TcpStream},
+    io::{BufReader, Write},
+    net::TcpStream,
     sync::Arc,
 };
 
@@ -29,7 +29,7 @@ fn main() {
             .with_no_client_auth(),
     );
 
-    let server_name = rustls::ServerName::try_from("test.localhost").expect("invalid DNS name");
+    let server_name = rustls::ServerName::try_from("opaque.localhost").expect("invalid DNS name");
 
     let mut tls_conn = ClientConnection::new(config, server_name).unwrap();
 
@@ -88,11 +88,36 @@ fn main() {
         println!("Wants reading.");
     }
 
+    let pc = &stream.conn.peer_certificates().unwrap()[0].0;
+
+    let pc = x509_parser::parse_x509_certificate(pc).unwrap().1;
+
     // let req = "\r\n\r\n";
     // socket.write_all(req.as_bytes()).unwrap();
 
     // let mut res = String::new();
     // socket.read_to_string(&mut res).unwrap();
 
-    // println!("{res}");
+    println!("Signature: {:02x?}", pc.signature_value.data);
+    println!(
+        "Subject: {:?}",
+        pc.tbs_certificate
+            .subject()
+            .iter_common_name()
+            .next()
+            .unwrap()
+            .as_str()
+            .unwrap()
+    );
+    println!(
+        "Authority: {:?}",
+        pc.tbs_certificate
+            .issuer()
+            .iter_common_name()
+            .next()
+            .unwrap()
+            .as_str()
+            .unwrap()
+    );
+    println!("Public key: {:02x?}", pc.tbs_certificate.public_key().raw);
 }
