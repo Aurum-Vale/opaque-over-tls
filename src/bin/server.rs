@@ -1,14 +1,20 @@
 use std::{
     fs,
     io::{prelude::*, BufReader},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     sync::Arc,
 };
 
-use rustls::ServerConnection;
+use rustls::{ServerConfig, ServerConnection};
+
+struct Client {
+    tls_conn: ServerConnection,
+    tls_socket: TcpStream,
+    tcp_socket: TcpStream,
+}
 
 struct ServerApp {
-    tls_conn: ServerConnection,
+    tls_config: Arc<ServerConfig>,
     tcp_listener: TcpListener,
 }
 
@@ -23,7 +29,7 @@ impl ServerApp {
         let certs = Self::load_certs(server_cert);
         let private_key = Self::load_private_key(server_priv_key);
 
-        let config = Arc::new(
+        let tls_config = Arc::new(
             rustls::ServerConfig::builder()
                 .with_safe_defaults()
                 .with_no_client_auth()
@@ -31,13 +37,11 @@ impl ServerApp {
                 .expect("bad certificates/private key"),
         );
 
-        let tls_conn = ServerConnection::new(config).unwrap();
-
         let tcp_listener = TcpListener::bind(server_ip).unwrap();
 
         ServerApp {
-            tls_conn,
             tcp_listener,
+            tls_config,
         }
     }
 
@@ -76,8 +80,38 @@ impl ServerApp {
 // Method impl
 impl ServerApp {
     fn accept_connection(&mut self) {
-        let mut tcp_socket = self.tcp_listener.accept().unwrap().0;
-        let mut stream = rustls::Stream::new(&mut self.tls_conn, &mut tcp_socket);
+        let mut tls_socket = self.tcp_listener.accept().unwrap().0;
+
+        let mut tls_conn = ServerConnection::new(self.tls_config.clone()).unwrap();
+
+        while tls_conn.is_handshaking() {
+            tls_conn.complete_io(&mut tls_socket).unwrap();
+        }
+
+        println!("TLS handshake done.");
+
+        let tcp_socket = self.tcp_listener.accept().unwrap().0;
+
+        let mut client = Client {
+            tls_conn,
+            tls_socket,
+            tcp_socket,
+        };
+
+        loop {
+            let mut buf_choice: [u8; 1] = [0];
+            client.tcp_socket.read_exact(&mut buf_choice).unwrap();
+
+            match buf_choice[0] {
+                1 => self.echo(&mut client),
+                2 => self.echo(&mut client),
+                _ => break,
+            }
+        }
+    }
+
+    fn echo(&mut self, client: &mut Client) {
+        let mut stream = rustls::Stream::new(&mut client.tls_conn, &mut client.tls_socket);
 
         let mut buf: [u8; 32] = [0; 32];
         let r = stream.read(&mut buf).unwrap();
@@ -91,7 +125,9 @@ impl ServerApp {
 
 fn main() {
     let mut app = ServerApp::init();
-    app.accept_connection()
+    loop {
+        app.accept_connection();
+    }
 }
 
 // fn handle_connection(mut stream: TcpStream) {

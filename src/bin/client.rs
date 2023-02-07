@@ -9,6 +9,7 @@ use rustls::ClientConnection;
 
 struct ClientApp {
     tls_conn: ClientConnection,
+    tls_socket: TcpStream,
     tcp_socket: TcpStream,
 }
 
@@ -44,12 +45,21 @@ impl ClientApp {
         let server_name =
             rustls::ServerName::try_from(server_domain_name).expect("invalid DNS name");
 
-        let tls_conn = ClientConnection::new(client_config, server_name).unwrap();
+        let mut tls_conn = ClientConnection::new(client_config, server_name).unwrap();
+
+        let mut tls_socket = TcpStream::connect(server_ip).unwrap();
+
+        while tls_conn.is_handshaking() {
+            tls_conn.complete_io(&mut tls_socket).unwrap();
+        }
+
+        println!("TLS handshake done.");
 
         let tcp_socket = TcpStream::connect(server_ip).unwrap();
 
         ClientApp {
             tls_conn,
+            tls_socket,
             tcp_socket,
         }
     }
@@ -60,12 +70,14 @@ impl ClientApp {
     fn register(&mut self) {}
 
     fn login(&mut self) {
-        let mut stream = rustls::Stream::new(&mut self.tls_conn, &mut self.tcp_socket);
+        self.tcp_socket.write_all(&[2]).unwrap();
 
-        stream.write_all(b"Hello World").unwrap();
+        let mut tls_stream = rustls::Stream::new(&mut self.tls_conn, &mut self.tls_socket);
+
+        tls_stream.write_all(b"Hello World").unwrap();
 
         let mut buf: [u8; 32] = [0; 32];
-        let r = stream.read(&mut buf).unwrap();
+        let r = tls_stream.read(&mut buf).unwrap();
 
         println!("Read {r}");
         println!("{:#?}", String::from_utf8_lossy(&buf[..r]));
@@ -101,6 +113,10 @@ impl ClientApp {
         //         .unwrap()
         // );
         // println!("Public key: {:02x?}", pc.tbs_certificate.public_key().raw);
+    }
+
+    fn exit(&mut self) {
+        self.tcp_socket.write_all(&[3]).unwrap();
     }
 }
 
@@ -143,7 +159,8 @@ fn main() {
             MainMenuChoice::Register => app.register(),
             MainMenuChoice::Login => app.login(),
             MainMenuChoice::Exit => {
-                return;
+                app.exit();
+                break;
             }
         }
     }
