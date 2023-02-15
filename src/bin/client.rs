@@ -156,6 +156,7 @@ impl ClientApp {
         // println!("Public key: {:02x?}", pc.tbs_certificate.public_key().raw);
     }
 
+    // TODO error handling
     fn login(&mut self) {
         let username = "Alice";
         let password = "password123";
@@ -193,6 +194,8 @@ impl ClientApp {
         );
 
         println!("{:?}", client_login_fin_res.session_key.as_slice());
+
+        // TODO use the session key to have the server echo the client
 
         // let pc = &stream.conn.peer_certificates().unwrap()[0].0;
         //

@@ -65,12 +65,62 @@ impl ServerApp {
         OpaqueCipherSuite,
         opaque_ke::keypair::PrivateKey<opaque_ke::Ristretto255>,
     > {
-        let mut rng = OsRng;
-        opaque_ke::ServerSetup::<OpaqueCipherSuite>::new(&mut rng)
+        use std::path::Path;
+
+        if Path::new("credentials/server.setup").is_file() {
+            let setup_data = fs::read(Path::new("credentials/server.setup")).unwrap();
+
+            opaque_ke::ServerSetup::<
+                OpaqueCipherSuite,
+                opaque_ke::keypair::PrivateKey<opaque_ke::Ristretto255>,
+            >::deserialize(&setup_data)
+            .unwrap()
+        } else {
+            println!("Missing OPAQUE server setup. Regenerating.");
+
+            fs::remove_dir_all(Path::new("credentials")).unwrap_or(());
+            fs::create_dir("credentials").unwrap();
+
+            let mut rng = OsRng;
+            let setup = opaque_ke::ServerSetup::<
+                OpaqueCipherSuite,
+                opaque_ke::keypair::PrivateKey<opaque_ke::Ristretto255>,
+            >::new(&mut rng);
+
+            let setup_data = setup.serialize();
+            let mut file = std::fs::File::create("credentials/server.setup").unwrap();
+            file.write_all(&setup_data).unwrap();
+
+            setup
+        }
     }
 
     fn init_credentials() -> HashMap<String, ServerRegistration<OpaqueCipherSuite>> {
-        HashMap::new()
+        use std::path::Path;
+        let mut cred_map = HashMap::new();
+
+        match fs::read_dir(Path::new("credentials")) {
+            Ok(dir_it) => {
+                for entry in dir_it {
+                    let entry_path = entry.unwrap().path();
+                    if entry_path.extension().unwrap() == "bin" {
+                        let name_path = entry_path.with_extension("name");
+                        let username = String::from_utf8(fs::read(name_path).unwrap()).unwrap();
+
+                        let bin_data = fs::read(entry_path).unwrap();
+                        let creds = ServerRegistration::<OpaqueCipherSuite>::deserialize(&bin_data)
+                            .unwrap();
+
+                        cred_map.insert(username, creds);
+                    }
+                }
+            }
+            Err(err) => {
+                println!("Couldn't load credentials. {err}");
+            }
+        }
+
+        cred_map
     }
 
     // TODO Unwrap management
@@ -159,6 +209,10 @@ impl ServerApp {
         let client_username = String::from_utf8(read_msg(&mut tls_stream)).unwrap();
         println!("{client_username}");
 
+        if self.credentials_map.contains_key(&client_username) {
+            panic!("User already exists."); // TODO
+        }
+
         let reg_req = read_msg(&mut tls_stream);
         println!("Read {}", reg_req.len());
         println!("{:#?}", String::from_utf8_lossy(&reg_req));
@@ -185,11 +239,21 @@ impl ServerApp {
         let registration_fin =
             RegistrationUpload::<OpaqueCipherSuite>::deserialize(&reg_upload).unwrap();
 
-        let password_file = ServerRegistration::<OpaqueCipherSuite>::finish(registration_fin);
+        let client_credentials = ServerRegistration::<OpaqueCipherSuite>::finish(registration_fin);
 
-        self.credentials_map.insert(client_username, password_file);
+        let cred_bin = client_credentials.serialize();
+        let filename = format!("credentials/{}.bin", self.credentials_map.len());
+        let mut file = std::fs::File::create(filename).unwrap();
+        file.write_all(&cred_bin).unwrap();
+        let filename = format!("credentials/{}.name", self.credentials_map.len());
+        let mut file = std::fs::File::create(filename).unwrap();
+        file.write_all(client_username.as_bytes()).unwrap();
+
+        self.credentials_map
+            .insert(client_username, client_credentials);
     }
 
+    // TODO error handling
     fn login(&mut self, client: &mut Client) {
         let mut tls_stream = rustls::Stream::new(&mut client.tls_conn, &mut client.tls_socket);
 

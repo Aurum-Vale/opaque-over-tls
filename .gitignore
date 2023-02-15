@@ -1,3 +1,4 @@
 /target
 /openssl/rootCA.*
 /openssl/server.*
+/credentials
