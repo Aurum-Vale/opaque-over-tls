@@ -6,8 +6,12 @@ use std::{
     sync::Arc,
 };
 
-use opaque_ke::{RegistrationRequest, RegistrationUpload, ServerRegistration};
+use opaque_ke::{
+    CredentialFinalization, CredentialRequest, RegistrationRequest, RegistrationUpload,
+    ServerLogin, ServerLoginStartParameters, ServerRegistration,
+};
 use opaque_over_tls::{read_msg, send_msg};
+use rand::rngs::OsRng;
 use rustls::{ServerConfig, ServerConnection};
 
 struct OpaqueCipherSuite;
@@ -61,7 +65,6 @@ impl ServerApp {
         OpaqueCipherSuite,
         opaque_ke::keypair::PrivateKey<opaque_ke::Ristretto255>,
     > {
-        use rand::rngs::OsRng;
         let mut rng = OsRng;
         opaque_ke::ServerSetup::<OpaqueCipherSuite>::new(&mut rng)
     }
@@ -188,15 +191,44 @@ impl ServerApp {
     }
 
     fn login(&mut self, client: &mut Client) {
-        let mut stream = rustls::Stream::new(&mut client.tls_conn, &mut client.tls_socket);
+        let mut tls_stream = rustls::Stream::new(&mut client.tls_conn, &mut client.tls_socket);
 
-        let mut buf: [u8; 32] = [0; 32];
-        let r = stream.read(&mut buf).unwrap();
+        let client_username = String::from_utf8(read_msg(&mut tls_stream)).unwrap();
+        println!("{client_username}");
 
-        println!("Read {r}");
-        println!("{:#?}", String::from_utf8_lossy(&buf[..r]));
+        let password_file = self.credentials_map.get(&client_username).unwrap();
+        // TODO handling unknown user,
+        // can be done by giving None to the ServerLogin step,
+        // which will fake a response
 
-        stream.write_all(&buf[..r]).unwrap();
+        let login_req = read_msg(&mut tls_stream);
+        let client_login_req =
+            CredentialRequest::<OpaqueCipherSuite>::deserialize(&login_req).unwrap();
+
+        let mut server_rng = OsRng;
+
+        let server_login_start_res = ServerLogin::<OpaqueCipherSuite>::start(
+            &mut server_rng,
+            &self.opaque_setup,
+            Some(password_file.clone()),
+            client_login_req,
+            client_username.as_bytes(),
+            ServerLoginStartParameters::default(),
+        )
+        .unwrap();
+
+        send_msg(
+            &mut tls_stream,
+            server_login_start_res.message.serialize().as_slice(),
+        );
+
+        let client_res = read_msg(&mut tls_stream);
+        let credential_fin =
+            CredentialFinalization::<OpaqueCipherSuite>::deserialize(&client_res).unwrap();
+
+        let server_login_fin_res = server_login_start_res.state.finish(credential_fin).unwrap();
+
+        println!("{:?}", server_login_fin_res.session_key.as_slice());
     }
 }
 

@@ -1,12 +1,16 @@
 use std::{
     fs,
-    io::{self, BufReader, Read, Write},
+    io::{self, BufReader, Write},
     net::TcpStream,
     sync::Arc,
 };
 
-use opaque_ke::{ClientRegistrationFinishParameters, RegistrationResponse};
+use opaque_ke::{
+    ClientLogin, ClientLoginFinishParameters, ClientRegistration,
+    ClientRegistrationFinishParameters, CredentialResponse, RegistrationResponse,
+};
 use opaque_over_tls::{read_msg, send_msg};
+use rand::rngs::OsRng;
 use rustls::ClientConnection;
 
 struct OpaqueCipherSuite;
@@ -83,8 +87,6 @@ impl ClientApp {
 
         self.tcp_socket.write_all(&[1]).unwrap();
 
-        use opaque_ke::ClientRegistration;
-        use rand::rngs::OsRng;
         let mut client_rng = OsRng;
         let client_reg_start_res =
             ClientRegistration::<OpaqueCipherSuite>::start(&mut client_rng, password.as_bytes())
@@ -155,17 +157,42 @@ impl ClientApp {
     }
 
     fn login(&mut self) {
-        self.tcp_socket.write_all(&[2]).unwrap();
+        let username = "Alice";
+        let password = "password123";
 
+        self.tcp_socket.write_all(&[2]).unwrap();
         let mut tls_stream = rustls::Stream::new(&mut self.tls_conn, &mut self.tls_socket);
 
-        tls_stream.write_all(b"Hello World").unwrap();
+        send_msg(&mut tls_stream, username.as_bytes());
 
-        let mut buf: [u8; 32] = [0; 32];
-        let r = tls_stream.read(&mut buf).unwrap();
+        let mut client_rng = OsRng;
+        let client_login_start_res =
+            ClientLogin::<OpaqueCipherSuite>::start(&mut client_rng, password.as_bytes()).unwrap();
 
-        println!("Read {r}");
-        println!("{:#?}", String::from_utf8_lossy(&buf[..r]));
+        send_msg(
+            &mut tls_stream,
+            client_login_start_res.message.serialize().as_slice(),
+        );
+
+        let server_res = read_msg(&mut tls_stream);
+        let credential_res =
+            CredentialResponse::<OpaqueCipherSuite>::deserialize(&server_res).unwrap();
+
+        let client_login_fin_res = client_login_start_res
+            .state
+            .finish(
+                password.as_bytes(),
+                credential_res,
+                ClientLoginFinishParameters::default(),
+            )
+            .unwrap();
+
+        send_msg(
+            &mut tls_stream,
+            client_login_fin_res.message.serialize().as_slice(),
+        );
+
+        println!("{:?}", client_login_fin_res.session_key.as_slice());
 
         // let pc = &stream.conn.peer_certificates().unwrap()[0].0;
         //
