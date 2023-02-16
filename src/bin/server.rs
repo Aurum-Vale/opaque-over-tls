@@ -10,17 +10,9 @@ use opaque_ke::{
     CredentialFinalization, CredentialRequest, RegistrationRequest, RegistrationUpload,
     ServerLogin, ServerLoginStartParameters, ServerRegistration,
 };
-use opaque_over_tls::{read_msg, send_msg};
+use opaque_over_tls::{read_msg, send_msg, OpaqueCipherSuite};
 use rand::rngs::OsRng;
 use rustls::{ServerConfig, ServerConnection};
-
-struct OpaqueCipherSuite;
-impl opaque_ke::CipherSuite for OpaqueCipherSuite {
-    type OprfCs = opaque_ke::Ristretto255;
-    type KeGroup = opaque_ke::Ristretto255;
-    type KeyExchange = opaque_ke::key_exchange::tripledh::TripleDh;
-    type Ksf = opaque_ke::ksf::Identity;
-}
 
 struct Client {
     tls_conn: ServerConnection,

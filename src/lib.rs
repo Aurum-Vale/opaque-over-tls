@@ -1,3 +1,13 @@
+use argon2::Argon2;
+
+pub struct OpaqueCipherSuite;
+impl opaque_ke::CipherSuite for OpaqueCipherSuite {
+    type OprfCs = opaque_ke::Ristretto255;
+    type KeGroup = opaque_ke::Ristretto255;
+    type KeyExchange = opaque_ke::key_exchange::tripledh::TripleDh;
+    type Ksf = Argon2<'static>;
+}
+
 pub fn send_msg(stream: &mut dyn std::io::Write, data: &[u8]) {
     let data_count: i32 = data.len().try_into().unwrap();
     let data_count_bytes = data_count.to_ne_bytes();
