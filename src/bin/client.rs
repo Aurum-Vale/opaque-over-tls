@@ -82,8 +82,16 @@ impl ClientApp {
 // Method impl
 impl ClientApp {
     fn register(&mut self) {
-        let username = "Alice";
-        let password = "password123";
+        let mut username = String::new();
+        let mut password = String::new();
+
+        println!("Username:");
+        io::stdin().read_line(&mut username).unwrap();
+        println!("Password:");
+        io::stdin().read_line(&mut password).unwrap();
+
+        let username = username.trim();
+        let password = password.trim();
 
         self.tcp_socket.write_all(&[1]).unwrap();
 
@@ -102,6 +110,11 @@ impl ClientApp {
         );
 
         let buf = read_msg(&mut tls_stream);
+
+        if buf.len() == 0 {
+            println!("Registration aborted (user already exists)");
+            return;
+        }
 
         println!("Read {}", buf.len());
         println!("{:#?}", String::from_utf8_lossy(&buf));
@@ -158,8 +171,16 @@ impl ClientApp {
 
     // TODO error handling
     fn login(&mut self) {
-        let username = "Alice";
-        let password = "password123";
+        let mut username = String::new();
+        let mut password = String::new();
+
+        println!("Username:");
+        io::stdin().read_line(&mut username).unwrap();
+        println!("Password:");
+        io::stdin().read_line(&mut password).unwrap();
+
+        let username = username.trim();
+        let password = password.trim();
 
         self.tcp_socket.write_all(&[2]).unwrap();
         let mut tls_stream = rustls::Stream::new(&mut self.tls_conn, &mut self.tls_socket);
@@ -179,14 +200,22 @@ impl ClientApp {
         let credential_res =
             CredentialResponse::<OpaqueCipherSuite>::deserialize(&server_res).unwrap();
 
-        let client_login_fin_res = client_login_start_res
-            .state
-            .finish(
-                password.as_bytes(),
-                credential_res,
-                ClientLoginFinishParameters::default(),
-            )
-            .unwrap();
+        use opaque_ke::errors::ProtocolError::InvalidLoginError;
+        let client_login_fin_res = match client_login_start_res.state.finish(
+            password.as_bytes(),
+            credential_res,
+            ClientLoginFinishParameters::default(),
+        ) {
+            Ok(fin_res) => fin_res,
+            Err(InvalidLoginError) => {
+                println!("Login failed: wrong username/password.");
+                send_msg(&mut tls_stream, b"");
+                return;
+            }
+            Err(err) => {
+                panic!("{:#?}", err);
+            }
+        };
 
         send_msg(
             &mut tls_stream,

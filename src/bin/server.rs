@@ -209,13 +209,14 @@ impl ServerApp {
         let client_username = String::from_utf8(read_msg(&mut tls_stream)).unwrap();
         println!("{client_username}");
 
-        if self.credentials_map.contains_key(&client_username) {
-            panic!("User already exists."); // TODO
-        }
-
         let reg_req = read_msg(&mut tls_stream);
         println!("Read {}", reg_req.len());
         println!("{:#?}", String::from_utf8_lossy(&reg_req));
+
+        if self.credentials_map.contains_key(&client_username) {
+            send_msg(&mut tls_stream, b"");
+            return;
+        }
 
         let client_reg_req =
             RegistrationRequest::<OpaqueCipherSuite>::deserialize(&reg_req).unwrap();
@@ -260,10 +261,13 @@ impl ServerApp {
         let client_username = String::from_utf8(read_msg(&mut tls_stream)).unwrap();
         println!("{client_username}");
 
-        let password_file = self.credentials_map.get(&client_username).unwrap();
-        // TODO handling unknown user,
-        // can be done by giving None to the ServerLogin step,
-        // which will fake a response
+        // If the user does not exist, set password file to None
+        // ServerLogin::start() will reply with a dummy CredentialResponse
+        // This prevents leaking the information of the user not existing.
+        let password_file = match self.credentials_map.get(&client_username) {
+            Some(pw_file) => Some(pw_file.clone()),
+            None => None,
+        };
 
         let login_req = read_msg(&mut tls_stream);
         let client_login_req =
@@ -274,7 +278,7 @@ impl ServerApp {
         let server_login_start_res = ServerLogin::<OpaqueCipherSuite>::start(
             &mut server_rng,
             &self.opaque_setup,
-            Some(password_file.clone()),
+            password_file.clone(),
             client_login_req,
             client_username.as_bytes(),
             ServerLoginStartParameters::default(),
@@ -287,6 +291,12 @@ impl ServerApp {
         );
 
         let client_res = read_msg(&mut tls_stream);
+
+        if client_res.len() == 0 {
+            println!("Login aborted by user");
+            return;
+        }
+
         let credential_fin =
             CredentialFinalization::<OpaqueCipherSuite>::deserialize(&client_res).unwrap();
 
