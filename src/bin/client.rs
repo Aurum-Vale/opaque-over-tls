@@ -9,7 +9,7 @@ use opaque_ke::{
     ClientLogin, ClientLoginFinishParameters, ClientRegistration,
     ClientRegistrationFinishParameters, CredentialResponse, RegistrationResponse,
 };
-use opaque_over_tls::{read_msg, send_msg, OpaqueCipherSuite};
+use opaque_over_tls::{increment_nonce, read_msg, send_msg, OpaqueCipherSuite};
 use rand::rngs::OsRng;
 use rustls::ClientConnection;
 
@@ -216,7 +216,47 @@ impl ClientApp {
 
         println!("{:?}", client_login_fin_res.session_key.as_slice());
 
-        // TODO use the session key to have the server echo the client
+        use aes_gcm_siv::{
+            aead::{Aead, KeyInit},
+            Aes256GcmSiv,
+            Nonce, // Or `Aes128GcmSiv`
+        };
+
+        let key = &client_login_fin_res.session_key.as_slice()[0..32];
+        let cipher = Aes256GcmSiv::new_from_slice(key).unwrap();
+        // Nonce is 96-bits (12 bytes) long
+        let mut nonce = Nonce::from_slice(&[0; 12]).to_owned();
+
+        // let ciphertext = cipher
+        //     .encrypt(nonce, b"plaintext message".as_ref())
+        //     .unwrap();
+        // let plaintext = cipher.decrypt(nonce, ciphertext.as_ref()).unwrap();
+
+        println!("Connected to server.");
+
+        loop {
+            let mut msg = String::new();
+            io::stdin().read_line(&mut msg).unwrap();
+            let msg = msg.trim();
+
+            let ciphertext = cipher.encrypt(&nonce, msg.as_bytes()).unwrap();
+            increment_nonce(&mut nonce);
+            println!("{:?}", nonce);
+
+            send_msg(&mut self.tcp_socket, &ciphertext);
+
+            if msg == "quit" {
+                break;
+            }
+
+            let ciphertext = read_msg(&mut self.tcp_socket);
+            let plaintext = cipher.decrypt(&nonce, ciphertext.as_ref()).unwrap();
+            increment_nonce(&mut nonce);
+            println!("{:?}", nonce);
+
+            let plaintext = String::from_utf8(plaintext).unwrap();
+            println!("From server: {plaintext}");
+        }
 
         // let pc = &stream.conn.peer_certificates().unwrap()[0].0;
         //

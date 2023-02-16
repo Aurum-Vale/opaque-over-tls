@@ -1,3 +1,4 @@
+use aes_gcm_siv::aead::{consts::U12, generic_array::GenericArray};
 use argon2::Argon2;
 
 pub struct OpaqueCipherSuite;
@@ -24,4 +25,14 @@ pub fn read_msg(stream: &mut dyn std::io::Read) -> Vec<u8> {
     let mut data = vec![0; length.try_into().unwrap()];
     stream.read_exact(&mut data).unwrap();
     return data;
+}
+
+pub fn increment_nonce(nonce: &mut GenericArray<u8, U12>) {
+    for i in 0..12 {
+        // Rust does not like implicit overflows...
+        nonce[i] = nonce[i].wrapping_add(1);
+        if nonce[i] != 0 {
+            break;
+        }
+    }
 }

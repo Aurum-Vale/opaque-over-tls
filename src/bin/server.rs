@@ -10,7 +10,7 @@ use opaque_ke::{
     CredentialFinalization, CredentialRequest, RegistrationRequest, RegistrationUpload,
     ServerLogin, ServerLoginStartParameters, ServerRegistration,
 };
-use opaque_over_tls::{read_msg, send_msg, OpaqueCipherSuite};
+use opaque_over_tls::{increment_nonce, read_msg, send_msg, OpaqueCipherSuite};
 use rand::rngs::OsRng;
 use rustls::{ServerConfig, ServerConnection};
 
@@ -295,6 +295,43 @@ impl ServerApp {
         let server_login_fin_res = server_login_start_res.state.finish(credential_fin).unwrap();
 
         println!("{:?}", server_login_fin_res.session_key.as_slice());
+
+        use aes_gcm_siv::{
+            aead::{Aead, KeyInit},
+            Aes256GcmSiv,
+            Nonce, // Or `Aes128GcmSiv`
+        };
+
+        let key = &server_login_fin_res.session_key.as_slice()[0..32];
+        let cipher = Aes256GcmSiv::new_from_slice(key).unwrap();
+        // Nonce is 96-bits (12 bytes) long
+        let mut nonce = Nonce::from_slice(&[0; 12]).to_owned();
+
+        // let ciphertext = cipher
+        //     .encrypt(nonce, b"plaintext message".as_ref())
+        //     .unwrap();
+        // let plaintext = cipher.decrypt(nonce, ciphertext.as_ref()).unwrap();
+
+        println!("Connected to server.");
+
+        loop {
+            let ciphertext = read_msg(&mut client.tcp_socket);
+            let plaintext = cipher.decrypt(&nonce, ciphertext.as_ref()).unwrap();
+            increment_nonce(&mut nonce);
+
+            let plaintext = String::from_utf8(plaintext).unwrap();
+            println!("From client: {plaintext}");
+
+            if plaintext == "quit" {
+                break;
+            }
+
+            let reply: String = plaintext.chars().rev().collect();
+            let ciphertext = cipher.encrypt(&nonce, reply.as_bytes()).unwrap();
+            increment_nonce(&mut nonce);
+
+            send_msg(&mut client.tcp_socket, &ciphertext);
+        }
     }
 }
 
