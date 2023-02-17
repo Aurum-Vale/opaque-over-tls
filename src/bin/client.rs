@@ -298,6 +298,7 @@ enum MainMenuChoice {
     Register,
     Login,
     Exit,
+    None,
 }
 
 fn main_menu() -> MainMenuChoice {
@@ -321,7 +322,8 @@ fn main_menu() -> MainMenuChoice {
     match choice {
         1 => MainMenuChoice::Register,
         2 => MainMenuChoice::Login,
-        _ => MainMenuChoice::Exit,
+        3 => MainMenuChoice::Exit,
+        _ => MainMenuChoice::None,
     }
 }
 
@@ -336,6 +338,7 @@ fn main() {
                 app.exit();
                 break;
             }
+            MainMenuChoice::None => (),
         }
     }
 }
