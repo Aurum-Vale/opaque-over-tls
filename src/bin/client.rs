@@ -241,7 +241,6 @@ impl ClientApp {
 
             let ciphertext = cipher.encrypt(&nonce, msg.as_bytes()).unwrap();
             increment_nonce(&mut nonce);
-            println!("{:?}", nonce);
 
             send_msg(&mut self.tcp_socket, &ciphertext);
 
@@ -252,7 +251,6 @@ impl ClientApp {
             let ciphertext = read_msg(&mut self.tcp_socket);
             let plaintext = cipher.decrypt(&nonce, ciphertext.as_ref()).unwrap();
             increment_nonce(&mut nonce);
-            println!("{:?}", nonce);
 
             let plaintext = String::from_utf8(plaintext).unwrap();
             println!("From server: {plaintext}");
