@@ -210,27 +210,19 @@ impl ClientApp {
         };
 
         send_msg(
-            &mut tls_stream,
+            &mut self.tcp_socket,
             client_login_fin_res.message.serialize().as_slice(),
         );
 
-        println!("{:?}", client_login_fin_res.session_key.as_slice());
-
         use aes_gcm_siv::{
             aead::{Aead, KeyInit},
-            Aes256GcmSiv,
-            Nonce, // Or `Aes128GcmSiv`
+            Aes256GcmSiv, Nonce,
         };
 
         let key = &client_login_fin_res.session_key.as_slice()[0..32];
         let cipher = Aes256GcmSiv::new_from_slice(key).unwrap();
         // Nonce is 96-bits (12 bytes) long
         let mut nonce = Nonce::from_slice(&[0; 12]).to_owned();
-
-        // let ciphertext = cipher
-        //     .encrypt(nonce, b"plaintext message".as_ref())
-        //     .unwrap();
-        // let plaintext = cipher.decrypt(nonce, ciphertext.as_ref()).unwrap();
 
         println!("Connected to server.");
 
