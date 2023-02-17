@@ -1,0 +1,3 @@
+[submodule "opaque-ke"]
+	path = opaque-ke
+	url = git@github.com:Helicosaurus-Rex/opaque-ke.git

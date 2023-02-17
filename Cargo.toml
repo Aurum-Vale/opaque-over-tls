@@ -12,7 +12,9 @@ rustls = "0.20"
 rustls-pemfile = "1"
 x509-parser = "0.14"
 # OPAQUE
-opaque-ke = { version = "2", features = ["argon2"] }
+opaque-ke = { path = "opaque-ke", version = "3.0.0-pre.1", features = [
+  "argon2",
+] }
 rand = "^0.8"
 argon2 = "^0.4"
 # Symmetric cipher to use with the session key obtained from OPAQUE
