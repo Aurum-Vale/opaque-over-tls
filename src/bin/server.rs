@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    ffi::OsString,
     fs,
     io::{prelude::*, BufReader},
     net::{TcpListener, TcpStream},
@@ -10,7 +11,7 @@ use opaque_ke::{
     CredentialFinalization, CredentialRequest, RegistrationRequest, RegistrationUpload,
     ServerLogin, ServerLoginStartParameters, ServerRegistration,
 };
-use opaque_over_tls::{increment_nonce, read_msg, send_msg, OpaqueCipherSuite};
+use opaque_over_tls::{increment_nonce, read_msg, send_msg, ClientQuery, OpaqueCipherSuite};
 use rand::rngs::OsRng;
 use rustls::{ServerConfig, ServerConnection};
 
@@ -33,24 +34,25 @@ struct ServerApp {
 // Static impl
 impl ServerApp {
     fn init_tls() -> Arc<ServerConfig> {
-        let server_cert = "openssl/server.crt";
+        let server_cert = "openssl/se2rver.crt";
         let server_priv_key = "openssl/server.key";
 
-        let certs = Self::load_certs(server_cert);
-        let private_key = Self::load_private_key(server_priv_key);
+        let certs = Self::load_certs(server_cert).expect("Should load server certificate");
+        let private_key =
+            Self::load_private_key(server_priv_key).expect("Should load server private key");
 
         Arc::new(
             rustls::ServerConfig::builder()
                 .with_safe_defaults()
                 .with_no_client_auth()
                 .with_single_cert(certs, private_key)
-                .expect("bad certificates/private key"),
+                .expect("Bad certificates or private key"),
         )
     }
 
     fn init_listener() -> TcpListener {
         let server_ip = "127.0.0.1:7878";
-        TcpListener::bind(server_ip).unwrap()
+        TcpListener::bind(server_ip).expect("Should open listening TCP port")
     }
 
     fn init_opaque() -> opaque_ke::ServerSetup<
@@ -66,12 +68,13 @@ impl ServerApp {
                 OpaqueCipherSuite,
                 opaque_ke::keypair::PrivateKey<opaque_ke::Ristretto255>,
             >::deserialize(&setup_data)
-            .unwrap()
+            .expect("OPAQUE server setup file should be deserializable")
         } else {
             println!("Missing OPAQUE server setup. Regenerating.");
 
             fs::remove_dir_all(Path::new("credentials")).unwrap_or(());
-            fs::create_dir("credentials").unwrap();
+            fs::create_dir("credentials")
+                .expect("Should be able to create credentials sub-directory");
 
             let mut rng = OsRng;
             let setup = opaque_ke::ServerSetup::<
@@ -91,31 +94,31 @@ impl ServerApp {
         use std::path::Path;
         let mut cred_map = HashMap::new();
 
-        match fs::read_dir(Path::new("credentials")) {
-            Ok(dir_it) => {
-                for entry in dir_it {
-                    let entry_path = entry.unwrap().path();
-                    if entry_path.extension().unwrap() == "bin" {
-                        let name_path = entry_path.with_extension("name");
-                        let username = String::from_utf8(fs::read(name_path).unwrap()).unwrap();
+        let dir_it = fs::read_dir(Path::new("credentials"))
+            .expect("Credentials sub-folder should exist and be readable");
 
-                        let bin_data = fs::read(entry_path).unwrap();
-                        let creds = ServerRegistration::<OpaqueCipherSuite>::deserialize(&bin_data)
-                            .unwrap();
+        for entry in dir_it {
+            let entry_path = entry
+                .expect("All entries in the credential subdir should be readable")
+                .path();
+            if entry_path.extension().unwrap_or(&OsString::from("")) == "bin" {
+                let name_path = entry_path.with_extension("name");
+                let username = String::from_utf8(
+                    fs::read(name_path).expect("Credentials files should be readable"),
+                )
+                .expect("Username should be valid UTF-8");
 
-                        cred_map.insert(username, creds);
-                    }
-                }
-            }
-            Err(err) => {
-                println!("Couldn't load credentials. {err}");
+                let bin_data = fs::read(entry_path).expect("Credentials files should be readable");
+                let creds = ServerRegistration::<OpaqueCipherSuite>::deserialize(&bin_data)
+                    .expect("Credentials files should be deserializable");
+
+                cred_map.insert(username, creds);
             }
         }
 
         cred_map
     }
 
-    // TODO Unwrap management
     fn init() -> ServerApp {
         let tls_config = Self::init_tls();
         let tcp_listener = Self::init_listener();
@@ -123,42 +126,43 @@ impl ServerApp {
         let credentials_map = Self::init_credentials();
 
         ServerApp {
-            tcp_listener,
             tls_config,
+            tcp_listener,
             opaque_setup,
             credentials_map,
         }
     }
 
-    fn load_certs(filename: &str) -> Vec<rustls::Certificate> {
-        let certfile = fs::File::open(filename).expect("cannot open certificate file");
+    fn load_certs(filename: &str) -> Result<Vec<rustls::Certificate>, std::io::Error> {
+        let certfile = fs::File::open(filename)?;
         let mut reader = BufReader::new(certfile);
-        rustls_pemfile::certs(&mut reader)
-            .unwrap()
+        let certs = rustls_pemfile::certs(&mut reader)?
             .iter()
             .map(|v| rustls::Certificate(v.clone()))
-            .collect()
+            .collect();
+
+        Ok(certs)
     }
 
-    fn load_private_key(filename: &str) -> rustls::PrivateKey {
-        let keyfile = fs::File::open(filename).expect("cannot open private key file");
+    // TODO better refactor
+    fn load_private_key(filename: &str) -> Result<rustls::PrivateKey, std::io::Error> {
+        let keyfile = fs::File::open(filename)?;
         let mut reader = BufReader::new(keyfile);
 
         loop {
-            match rustls_pemfile::read_one(&mut reader).expect("cannot parse private key .pem file")
-            {
-                Some(rustls_pemfile::Item::RSAKey(key)) => return rustls::PrivateKey(key),
-                Some(rustls_pemfile::Item::PKCS8Key(key)) => return rustls::PrivateKey(key),
-                Some(rustls_pemfile::Item::ECKey(key)) => return rustls::PrivateKey(key),
+            match rustls_pemfile::read_one(&mut reader)? {
+                Some(rustls_pemfile::Item::RSAKey(key)) => return Ok(rustls::PrivateKey(key)),
+                Some(rustls_pemfile::Item::PKCS8Key(key)) => return Ok(rustls::PrivateKey(key)),
+                Some(rustls_pemfile::Item::ECKey(key)) => return Ok(rustls::PrivateKey(key)),
                 None => break,
                 _ => {}
             }
         }
 
-        panic!(
-            "no keys found in {:?} (encrypted keys not supported)",
-            filename
-        );
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("Could not find private key in {filename}"),
+        ))
     }
 }
 
@@ -187,10 +191,11 @@ impl ServerApp {
             let mut buf_choice: [u8; 1] = [0];
             client.tcp_socket.read_exact(&mut buf_choice).unwrap();
 
-            match buf_choice[0] {
-                1 => self.register(&mut client),
-                2 => self.login(&mut client),
-                _ => break,
+            match buf_choice[0].try_into() {
+                Ok(ClientQuery::Registration) => self.register(&mut client),
+                Ok(ClientQuery::Login) => self.login(&mut client),
+                Ok(ClientQuery::Disconnect) => break,
+                Err(_) => break,
             }
         }
     }
@@ -198,15 +203,15 @@ impl ServerApp {
     fn register(&mut self, client: &mut Client) {
         let mut tls_stream = rustls::Stream::new(&mut client.tls_conn, &mut client.tls_socket);
 
-        let client_username = String::from_utf8(read_msg(&mut tls_stream)).unwrap();
+        let client_username = String::from_utf8(read_msg(&mut tls_stream).unwrap()).unwrap();
         println!("{client_username}");
 
-        let reg_req = read_msg(&mut tls_stream);
+        let reg_req = read_msg(&mut tls_stream).unwrap();
         println!("Read {}", reg_req.len());
         println!("{:#?}", String::from_utf8_lossy(&reg_req));
 
         if self.credentials_map.contains_key(&client_username) {
-            send_msg(&mut tls_stream, b"");
+            send_msg(&mut tls_stream, b"").unwrap();
             return;
         }
 
@@ -223,9 +228,10 @@ impl ServerApp {
         send_msg(
             &mut tls_stream,
             server_reg_start_res.message.serialize().as_slice(),
-        );
+        )
+        .unwrap();
 
-        let reg_upload = read_msg(&mut tls_stream);
+        let reg_upload = read_msg(&mut tls_stream).unwrap();
         println!("Read {}", reg_upload.len());
         println!("{:#?}", String::from_utf8_lossy(&reg_upload));
 
@@ -250,8 +256,7 @@ impl ServerApp {
     fn login(&mut self, client: &mut Client) {
         let mut tls_stream = rustls::Stream::new(&mut client.tls_conn, &mut client.tls_socket);
 
-        let client_username = String::from_utf8(read_msg(&mut tls_stream)).unwrap();
-        println!("{client_username}");
+        let client_username = String::from_utf8(read_msg(&mut tls_stream).unwrap()).unwrap();
 
         // If the user does not exist, set password file to None
         // ServerLogin::start() will reply with a dummy CredentialResponse
@@ -261,7 +266,7 @@ impl ServerApp {
             None => None,
         };
 
-        let login_req = read_msg(&mut tls_stream);
+        let login_req = read_msg(&mut tls_stream).unwrap();
         let client_login_req =
             CredentialRequest::<OpaqueCipherSuite>::deserialize(&login_req).unwrap();
 
@@ -280,9 +285,10 @@ impl ServerApp {
         send_msg(
             &mut tls_stream,
             server_login_start_res.message.serialize().as_slice(),
-        );
+        )
+        .unwrap();
 
-        let client_res = read_msg(&mut client.tcp_socket);
+        let client_res = read_msg(&mut client.tcp_socket).unwrap();
 
         if client_res.len() == 0 {
             println!("Login aborted by user");
@@ -304,10 +310,10 @@ impl ServerApp {
         // Nonce is 96-bits (12 bytes) long
         let mut nonce = Nonce::from_slice(&[0; 12]).to_owned();
 
-        println!("Connected to server.");
+        println!("{client_username} is connected.");
 
         loop {
-            let ciphertext = read_msg(&mut client.tcp_socket);
+            let ciphertext = read_msg(&mut client.tcp_socket).unwrap();
             let plaintext = cipher.decrypt(&nonce, ciphertext.as_ref()).unwrap();
             increment_nonce(&mut nonce);
 
@@ -322,7 +328,7 @@ impl ServerApp {
             let ciphertext = cipher.encrypt(&nonce, reply.as_bytes()).unwrap();
             increment_nonce(&mut nonce);
 
-            send_msg(&mut client.tcp_socket, &ciphertext);
+            send_msg(&mut client.tcp_socket, &ciphertext).unwrap();
         }
     }
 }
@@ -333,14 +339,3 @@ fn main() {
         app.accept_connection();
     }
 }
-
-// fn handle_connection(mut stream: TcpStream) {
-//     let buf_reader = BufReader::new(&mut stream);
-//     let http_request: Vec<_> = buf_reader
-//         .lines()
-//         .map(|result| result.unwrap())
-//         .take_while(|line| !line.is_empty())
-//         .collect();
-//     let response = "HTTP/1.1 200 OK\r\nContent-Length: {length}\r\n\r\nHello World!";
-//     stream.write_all(response.as_bytes()).unwrap();
-// }

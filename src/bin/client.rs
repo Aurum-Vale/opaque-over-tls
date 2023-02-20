@@ -9,7 +9,7 @@ use opaque_ke::{
     ClientLogin, ClientLoginFinishParameters, ClientRegistration,
     ClientRegistrationFinishParameters, CredentialResponse, RegistrationResponse,
 };
-use opaque_over_tls::{increment_nonce, read_msg, send_msg, OpaqueCipherSuite};
+use opaque_over_tls::{increment_nonce, read_msg, send_msg, ClientQuery, OpaqueCipherSuite};
 use rand::rngs::OsRng;
 use rustls::ClientConnection;
 
@@ -21,7 +21,9 @@ struct ClientApp {
 
 // Static impl
 impl ClientApp {
-    // TODO Unwrap management
+    /// Initialise the client application.
+    /// Manages TLS configuration and TCP connections.
+    /// Tries to connect to the server application.
     fn init() -> ClientApp {
         let root_ca_filepath = "openssl/rootCA.crt";
         let server_domain_name = "opaque.localhost";
@@ -30,16 +32,21 @@ impl ClientApp {
         // Create the CA root store, add the CA certificate to it
         let mut root_store = rustls::RootCertStore::empty();
 
-        let root_crt_file = fs::File::open(root_ca_filepath).unwrap();
+        let root_crt_file =
+            fs::File::open(root_ca_filepath).expect("Could not open CA certificate file");
+
         let mut br = BufReader::new(root_crt_file);
 
-        let cert_u8 = rustls_pemfile::certs(&mut br).unwrap().pop().unwrap();
+        let cert_u8 = rustls_pemfile::certs(&mut br)
+            .expect("Parsing CA certificate failed")
+            .pop()
+            .expect("CA certificate file is empty");
 
         let cert = rustls::Certificate(cert_u8);
 
-        root_store.add(&cert).unwrap();
-
-        //println!("{}", root_store.len());
+        root_store
+            .add(&cert)
+            .expect("Failed to add CA certificate to root store");
 
         let client_config = Arc::new(
             rustls::ClientConfig::builder()
@@ -49,19 +56,26 @@ impl ClientApp {
         );
 
         let server_name =
-            rustls::ServerName::try_from(server_domain_name).expect("invalid DNS name");
+            rustls::ServerName::try_from(server_domain_name).expect("Invalid DNS name");
 
-        let mut tls_conn = ClientConnection::new(client_config, server_name).unwrap();
+        // Create the TLS connection (only TLS-related stuff, not TCP)
+        let mut tls_conn = ClientConnection::new(client_config, server_name)
+            .expect("Failure to create TLS connection");
 
-        let mut tls_socket = TcpStream::connect(server_ip).unwrap();
+        let mut tls_socket =
+            TcpStream::connect(server_ip).expect("TCP connection to server failed");
 
         while tls_conn.is_handshaking() {
-            tls_conn.complete_io(&mut tls_socket).unwrap();
+            tls_conn
+                .complete_io(&mut tls_socket)
+                .expect("Should finish TLS handshake");
         }
 
         println!("TLS handshake done.");
 
-        let tcp_socket = TcpStream::connect(server_ip).unwrap();
+        // Unencrypted TCP socket
+        let tcp_socket =
+            TcpStream::connect(server_ip).expect("Failed connection to plain TCP with server");
 
         ClientApp {
             tls_conn,
@@ -78,30 +92,37 @@ impl ClientApp {
         let mut password = String::new();
 
         println!("Username:");
-        io::stdin().read_line(&mut username).unwrap();
+        io::stdin()
+            .read_line(&mut username)
+            .expect("Could not read username stdio");
         println!("Password:");
-        io::stdin().read_line(&mut password).unwrap();
+        io::stdin()
+            .read_line(&mut password)
+            .expect("Could not read password from stdio");
 
         let username = username.trim();
         let password = password.trim();
 
-        self.tcp_socket.write_all(&[1]).unwrap();
+        self.tcp_socket
+            .write_all(&[ClientQuery::Registration as u8])
+            .expect("Could not send to TCP");
 
         let mut client_rng = OsRng;
         let client_reg_start_res =
             ClientRegistration::<OpaqueCipherSuite>::start(&mut client_rng, password.as_bytes())
-                .unwrap();
+                .expect("Failed to create Client Registration request");
 
         let mut tls_stream = rustls::Stream::new(&mut self.tls_conn, &mut self.tls_socket);
 
-        send_msg(&mut tls_stream, username.as_bytes());
+        send_msg(&mut tls_stream, username.as_bytes()).unwrap();
 
         send_msg(
             &mut tls_stream,
             client_reg_start_res.message.serialize().as_slice(),
-        );
+        )
+        .unwrap();
 
-        let buf = read_msg(&mut tls_stream);
+        let buf = read_msg(&mut tls_stream).unwrap();
 
         if buf.len() == 0 {
             println!("Registration aborted (user already exists)");
@@ -111,7 +132,8 @@ impl ClientApp {
         println!("Read {}", buf.len());
         println!("{:#?}", String::from_utf8_lossy(&buf));
 
-        let server_reg_res = RegistrationResponse::<OpaqueCipherSuite>::deserialize(&buf).unwrap();
+        let server_reg_res = RegistrationResponse::<OpaqueCipherSuite>::deserialize(&buf)
+            .expect("Invalid server response for Registration");
 
         let client_reg_fin_res = client_reg_start_res
             .state
@@ -121,44 +143,13 @@ impl ClientApp {
                 server_reg_res,
                 ClientRegistrationFinishParameters::default(),
             )
-            .unwrap();
+            .expect("Could not finish Client Registration");
 
         send_msg(
             &mut tls_stream,
             client_reg_fin_res.message.serialize().as_slice(),
-        );
-
-        // let pc = &stream.conn.peer_certificates().unwrap()[0].0;
-        //
-        // let pc = x509_parser::parse_x509_certificate(pc).unwrap().1;
-        //
-        // let req = "\r\n\r\n";
-        // socket.write_all(req.as_bytes()).unwrap();
-        // let mut res = String::new();
-        // socket.read_to_string(&mut res).unwrap();
-        //
-        // println!("Signature: {:02x?}", pc.signature_value.data);
-        // println!(
-        //     "Subject: {:?}",
-        //     pc.tbs_certificate
-        //         .subject()
-        //         .iter_common_name()
-        //         .next()
-        //         .unwrap()
-        //         .as_str()
-        //         .unwrap()
-        // );
-        // println!(
-        //     "Authority: {:?}",
-        //     pc.tbs_certificate
-        //         .issuer()
-        //         .iter_common_name()
-        //         .next()
-        //         .unwrap()
-        //         .as_str()
-        //         .unwrap()
-        // );
-        // println!("Public key: {:02x?}", pc.tbs_certificate.public_key().raw);
+        )
+        .unwrap();
     }
 
     // TODO error handling
@@ -174,10 +165,12 @@ impl ClientApp {
         let username = username.trim();
         let password = password.trim();
 
-        self.tcp_socket.write_all(&[2]).unwrap();
+        self.tcp_socket
+            .write_all(&[ClientQuery::Login as u8])
+            .unwrap();
         let mut tls_stream = rustls::Stream::new(&mut self.tls_conn, &mut self.tls_socket);
 
-        send_msg(&mut tls_stream, username.as_bytes());
+        send_msg(&mut tls_stream, username.as_bytes()).unwrap();
 
         let mut client_rng = OsRng;
         let client_login_start_res =
@@ -186,9 +179,10 @@ impl ClientApp {
         send_msg(
             &mut tls_stream,
             client_login_start_res.message.serialize().as_slice(),
-        );
+        )
+        .unwrap();
 
-        let server_res = read_msg(&mut tls_stream);
+        let server_res = read_msg(&mut tls_stream).unwrap();
         let credential_res =
             CredentialResponse::<OpaqueCipherSuite>::deserialize(&server_res).unwrap();
 
@@ -201,7 +195,7 @@ impl ClientApp {
             Ok(fin_res) => fin_res,
             Err(InvalidLoginError) => {
                 println!("Login failed: wrong username/password.");
-                send_msg(&mut tls_stream, b"");
+                send_msg(&mut self.tcp_socket, b"").unwrap();
                 return;
             }
             Err(err) => {
@@ -212,7 +206,8 @@ impl ClientApp {
         send_msg(
             &mut self.tcp_socket,
             client_login_fin_res.message.serialize().as_slice(),
-        );
+        )
+        .unwrap();
 
         use aes_gcm_siv::{
             aead::{Aead, KeyInit},
@@ -234,55 +229,25 @@ impl ClientApp {
             let ciphertext = cipher.encrypt(&nonce, msg.as_bytes()).unwrap();
             increment_nonce(&mut nonce);
 
-            send_msg(&mut self.tcp_socket, &ciphertext);
+            send_msg(&mut self.tcp_socket, &ciphertext).unwrap();
 
             if msg == "quit" {
                 break;
             }
 
-            let ciphertext = read_msg(&mut self.tcp_socket);
+            let ciphertext = read_msg(&mut self.tcp_socket).unwrap();
             let plaintext = cipher.decrypt(&nonce, ciphertext.as_ref()).unwrap();
             increment_nonce(&mut nonce);
 
             let plaintext = String::from_utf8(plaintext).unwrap();
             println!("From server: {plaintext}");
         }
-
-        // let pc = &stream.conn.peer_certificates().unwrap()[0].0;
-        //
-        // let pc = x509_parser::parse_x509_certificate(pc).unwrap().1;
-        //
-        // let req = "\r\n\r\n";
-        // socket.write_all(req.as_bytes()).unwrap();
-        // let mut res = String::new();
-        // socket.read_to_string(&mut res).unwrap();
-        //
-        // println!("Signature: {:02x?}", pc.signature_value.data);
-        // println!(
-        //     "Subject: {:?}",
-        //     pc.tbs_certificate
-        //         .subject()
-        //         .iter_common_name()
-        //         .next()
-        //         .unwrap()
-        //         .as_str()
-        //         .unwrap()
-        // );
-        // println!(
-        //     "Authority: {:?}",
-        //     pc.tbs_certificate
-        //         .issuer()
-        //         .iter_common_name()
-        //         .next()
-        //         .unwrap()
-        //         .as_str()
-        //         .unwrap()
-        // );
-        // println!("Public key: {:02x?}", pc.tbs_certificate.public_key().raw);
     }
 
     fn exit(&mut self) {
-        self.tcp_socket.write_all(&[3]).unwrap();
+        self.tcp_socket
+            .write_all(&[ClientQuery::Disconnect as u8])
+            .unwrap();
     }
 }
 
