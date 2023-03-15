@@ -10,7 +10,10 @@ openssl req -x509 \
 
 
 # Generate the server private key
-openssl genrsa -out server.key 2048
+# RSA 
+# openssl genrsa -out server.key 2048
+# ECDHE (Ellipic Curves)
+openssl genpkey -out server.key -algorithm EC -pkeyopt ec_paramgen_curve:P-256
 
 # Create the certificate signature request (CSR)
 openssl req -new -key server.key -out server.csr -config csr.conf
