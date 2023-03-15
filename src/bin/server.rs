@@ -34,7 +34,7 @@ struct ServerApp {
 // Static impl
 impl ServerApp {
     fn init_tls() -> Arc<ServerConfig> {
-        let server_cert = "openssl/se2rver.crt";
+        let server_cert = "openssl/server.crt";
         let server_priv_key = "openssl/server.key";
 
         let certs = Self::load_certs(server_cert).expect("Should load server certificate");
