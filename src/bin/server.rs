@@ -174,7 +174,10 @@ impl ServerApp {
         let mut tls_conn = ServerConnection::new(self.tls_config.clone()).unwrap();
 
         while tls_conn.is_handshaking() {
-            tls_conn.complete_io(&mut tls_socket).unwrap();
+            if let Err(_) = tls_conn.complete_io(&mut tls_socket) {
+                println!("TLS handshake failed.");
+                return;
+            }
         }
 
         println!("TLS handshake done.");
