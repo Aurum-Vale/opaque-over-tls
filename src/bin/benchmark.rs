@@ -1,5 +1,5 @@
 use std::{
-    fs,
+    fs::{self, File},
     io::{BufReader, Read, Write},
     sync::Arc,
     time::Instant,
@@ -38,8 +38,8 @@ fn load_private_key(filename: &str) -> Result<rustls::PrivateKey, std::io::Error
     ))
 }
 
-fn benchmark_tls() {
-    println!("Benckmarking TLS alone.");
+fn benchmark_tls() -> ([usize; 3], String) {
+    let start_client_init = Instant::now();
 
     // CLIENT INIT
     let root_ca_filepath = "openssl/rootCA.crt";
@@ -70,6 +70,9 @@ fn benchmark_tls() {
             .with_no_client_auth(),
     );
 
+    let time_client_init = start_client_init.elapsed();
+    let start_server_init = Instant::now();
+
     // SERVER INIT
     let server_cert = "openssl/server.crt";
     let server_priv_key = "openssl/server.key";
@@ -85,55 +88,90 @@ fn benchmark_tls() {
             .expect("Bad certificates or private key"),
     );
 
-    // CONNECTION
+    let time_server_init = start_server_init.elapsed();
+
     let server_name = rustls::ServerName::try_from(server_domain_name).expect("Invalid DNS name");
-    let mut sv_tls_conn = ServerConnection::new(server_config.clone()).unwrap();
+
+    let start_client_hello = Instant::now();
+
+    // Snd client hello
     let mut cl_tls_conn = ClientConnection::new(client_config, server_name).unwrap();
-
-    let start = Instant::now();
-
-    // FIRST MESSAGE (CLIENT HELLO)
     let mut tls_buf = vec![];
     let m1_len = cl_tls_conn.write_tls(&mut tls_buf).unwrap();
+
+    let time_client_hello = start_client_hello.elapsed();
+    let start_server_hello = Instant::now();
+
+    // Rcv client hello + Snd server hello
+    let mut sv_tls_conn = ServerConnection::new(server_config.clone()).unwrap();
     sv_tls_conn.read_tls(&mut tls_buf.as_slice()).unwrap();
     sv_tls_conn.process_new_packets().unwrap();
-
-    // SECOND MESSAGE (SERVER HELLO)
     let mut tls_buf = vec![];
     let m2_len = sv_tls_conn.write_tls(&mut tls_buf).unwrap();
+
+    let time_server_hello = start_server_hello.elapsed();
+    let start_client_key_share = Instant::now();
+
+    // Rcv server hello + Client KE + Snd "Hello World"
     cl_tls_conn.read_tls(&mut tls_buf.as_slice()).unwrap();
     cl_tls_conn.process_new_packets().unwrap();
-
-    // THIRD MESSAGE
     let text = "Hello, World!";
-
     cl_tls_conn
         .writer()
         .write(text.as_bytes())
         .expect("Should send message");
-
     let mut tls_buf = vec![];
     let m3_len = cl_tls_conn.write_tls(&mut tls_buf).unwrap();
+
+    let time_client_key_share = start_client_key_share.elapsed();
+    let start_server_finished = Instant::now();
+
     sv_tls_conn.read_tls(&mut tls_buf.as_slice()).unwrap();
     sv_tls_conn.process_new_packets().unwrap();
-
-    let mut result = [0; 50];
-
+    let mut result = [0; 13];
     sv_tls_conn
         .reader()
         .read(&mut result)
         .expect("Should receive message");
 
-    let rtt = start.elapsed();
+    let time_server_finished = start_server_finished.elapsed();
 
     let result = String::from_utf8(result.to_vec()).unwrap();
-    println!("Received: {result}");
 
-    println!("Time for handshake + msg: {:#?}", rtt);
-    println!("Messages length in bytes: {m1_len}, {m2_len}, {m3_len}");
-    println!("Total: {} bytes", m1_len + m2_len + m3_len);
+    assert!(result == text);
+
+    let msg_len = [m1_len, m2_len, m3_len];
+    let times = [
+        time_client_init,
+        time_server_init,
+        time_client_hello,
+        time_server_hello,
+        time_client_key_share,
+        time_server_finished,
+    ]
+    .map(|t| t.as_micros().to_string())
+    .join(",");
+
+    return (msg_len, times);
 }
 
 fn main() {
-    benchmark_tls();
+    let (msg_len, _) = benchmark_tls();
+    println!("TLS messages length: {msg_len:?}");
+    println!("Total: {}", msg_len.iter().fold(0, |s, x| s + x));
+
+    let mut csv = File::create("tls_alone.csv").expect("Should be able to write file");
+    csv.write_all(
+        "client_init,server_init,client_hello,server_hello,client_key_share,server_finished\n"
+            .as_bytes(),
+    )
+    .unwrap();
+
+    for i in 1..50000 {
+        let (_, times) = benchmark_tls();
+        csv.write_all(format!("{times}\n").as_bytes()).unwrap();
+        if i % 5000 == 0 {
+            println!("{i}");
+        }
+    }
 }
