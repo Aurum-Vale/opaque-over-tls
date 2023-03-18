@@ -1,11 +1,17 @@
+use argon2::Argon2;
+use opaque_ke::{
+    ClientLogin, ClientLoginFinishParameters, ServerLogin, ServerLoginStartParameters,
+    ServerRegistration,
+};
+use rand::rngs::OsRng;
+use rustls::{ClientConnection, ServerConnection};
 use std::{
     fs::{self, File},
     io::{BufReader, Read, Write},
+    path::Path,
     sync::Arc,
     time::Instant,
 };
-
-use rustls::{ClientConnection, ServerConnection};
 
 fn load_certs(filename: &str) -> Result<Vec<rustls::Certificate>, std::io::Error> {
     let certfile = fs::File::open(filename)?;
@@ -155,20 +161,137 @@ fn benchmark_tls() -> ([usize; 3], String) {
     return (msg_len, times);
 }
 
-fn main() {
-    let (msg_len, _) = benchmark_tls();
-    println!("TLS messages length: {msg_len:?}");
-    println!("Total: {}", msg_len.iter().fold(0, |s, x| s + x));
+pub struct OpaqueCipherSuite;
+impl opaque_ke::CipherSuite for OpaqueCipherSuite {
+    type OprfCs = opaque_ke::Ristretto255;
+    type KeGroup = opaque_ke::Ristretto255;
+    type KeyExchange = opaque_ke::key_exchange::tripledh::TripleDh;
+    type Ksf = Argon2<'static>;
+}
 
-    let mut csv = File::create("tls_alone.csv").expect("Should be able to write file");
-    csv.write_all(
-        "client_init,server_init,client_hello,server_hello,client_key_share,server_finished\n"
-            .as_bytes(),
+fn benchmark_opaque() -> ([usize; 3], String) {
+    // Credentials and setup data retrieval (untimed)
+    // All files are used from the main program
+    let server_setup_data = fs::read(Path::new("credentials/server.setup")).unwrap();
+    let client_username = "benchmark";
+    let client_password = "benchmark";
+    let bin_credentials = fs::read(Path::new("credentials/benchmark.bin")).unwrap();
+    let server_password = ServerRegistration::<OpaqueCipherSuite>::deserialize(&bin_credentials)
+        .expect("Credentials files should be deserializable");
+
+    // Server init
+    let start_server_init = Instant::now();
+
+    let server_setup = opaque_ke::ServerSetup::<
+        OpaqueCipherSuite,
+        opaque_ke::keypair::PrivateKey<opaque_ke::Ristretto255>,
+    >::deserialize(&server_setup_data)
+    .expect("OPAQUE server setup file should be deserializable");
+
+    let time_server_init = start_server_init.elapsed();
+
+    // Credential Request
+    let start_cred_req = Instant::now();
+
+    let mut client_rng = OsRng;
+    let client_login_start_res =
+        ClientLogin::<OpaqueCipherSuite>::start(&mut client_rng, client_password.as_bytes())
+            .unwrap();
+
+    let time_cred_req = start_cred_req.elapsed();
+    let m1_len = client_login_start_res.message.serialize().len();
+
+    // Credential Response
+    let start_cred_res = Instant::now();
+
+    let mut server_rng = OsRng;
+    let server_login_start_res = ServerLogin::<OpaqueCipherSuite>::start(
+        &mut server_rng,
+        &server_setup,
+        Some(server_password),
+        client_login_start_res.message,
+        client_username.as_bytes(),
+        ServerLoginStartParameters::default(),
     )
     .unwrap();
 
-    for i in 1..50000 {
-        let (_, times) = benchmark_tls();
+    let time_cred_res = start_cred_res.elapsed();
+    let m2_len = server_login_start_res.message.serialize().len();
+
+    // Credentials Finalization, Client
+    let start_cl_fin = Instant::now();
+
+    let client_login_fin_res = client_login_start_res
+        .state
+        .finish(
+            client_password.as_bytes(),
+            server_login_start_res.message,
+            ClientLoginFinishParameters::default(),
+        )
+        .unwrap();
+
+    let time_cl_fin = start_cl_fin.elapsed();
+    let m3_len = client_login_fin_res.message.serialize().len();
+
+    // Credentials Finalization, Server
+    let start_sv_fin = Instant::now();
+
+    let server_login_fin_res = server_login_start_res
+        .state
+        .finish(client_login_fin_res.message)
+        .unwrap();
+
+    let time_sv_fin = start_sv_fin.elapsed();
+
+    let server_session_key = server_login_fin_res.session_key;
+    let client_session_key = client_login_fin_res.session_key;
+
+    assert!(server_session_key == client_session_key);
+
+    let msg_len = [m1_len, m2_len, m3_len];
+    let times = [
+        time_server_init,
+        time_cred_req,
+        time_cred_res,
+        time_cl_fin,
+        time_sv_fin,
+    ]
+    .map(|t| t.as_micros().to_string())
+    .join(",");
+
+    return (msg_len, times);
+}
+
+fn main() {
+    // let (msg_len, _) = benchmark_tls();
+    // println!("TLS messages length: {msg_len:?}");
+    // println!("Total: {}", msg_len.iter().fold(0, |s, x| s + x));
+    //
+    // let mut csv = File::create("tls_alone.csv").expect("Should be able to write file");
+    // csv.write_all(
+    //     "client_init,server_init,client_hello,server_hello,client_key_share,server_finished\n"
+    //         .as_bytes(),
+    // )
+    // .unwrap();
+    //
+    // for i in 1..50000 {
+    //     let (_, times) = benchmark_tls();
+    //     csv.write_all(format!("{times}\n").as_bytes()).unwrap();
+    //     if i % 5000 == 0 {
+    //         println!("{i}");
+    //     }
+    // }
+
+    let (msg_len, _) = benchmark_opaque();
+    println!("OPAQUE messages length: {msg_len:?}");
+    println!("Total: {}", msg_len.iter().fold(0, |s, x| s + x));
+
+    let mut csv = File::create("tls_alone.csv").expect("Should be able to write file");
+    csv.write_all("server_init,cred_req,cred_res,cl_fin,sv_fin\n".as_bytes())
+        .unwrap();
+
+    for i in 1..1000 {
+        let (_, times) = benchmark_opaque();
         csv.write_all(format!("{times}\n").as_bytes()).unwrap();
         if i % 5000 == 0 {
             println!("{i}");
