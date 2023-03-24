@@ -16,6 +16,8 @@ Three programes are provided in the project. The client and server work together
 
 IMPORTANT: if the `OpaqueCipherSuite` struct in `lib.rs` is changed (to use a different KSF for example), the server setup will no longer be valid and the whole `credentials` folder will be regenerated.
 
-Once connected, the client can register any number of users, and login as any of them. Once logged in, a user can send any text message, that will be echoed in reverse by the server; those messages are encrypted by the OPAQUE session key.
+Once connected, the client can register any number of users, and login as any of them. Once logged in, a user can send any text message, that will be echoed in reverse by the server; those messages are encrypted by the OPAQUE session key. The client can terminate the connection by sending `quit`. The server runs in an endless loop and may be terminated with Ctrl+C instead.
 
 The benchmark program acts separately as both a client and a server, without a TCP stack in the middle, to measure the size of the messages exchanged and the time it took to process messages.
+
+The `benchmark` folder includes previously observed measurements.
