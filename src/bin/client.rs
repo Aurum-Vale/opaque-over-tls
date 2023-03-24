@@ -129,8 +129,8 @@ impl ClientApp {
             return;
         }
 
-        println!("Read {}", buf.len());
-        println!("{:#?}", String::from_utf8_lossy(&buf));
+        // println!("Read {}", buf.len());
+        // println!("{:#?}", String::from_utf8_lossy(&buf));
 
         let server_reg_res = RegistrationResponse::<OpaqueCipherSuite>::deserialize(&buf)
             .expect("Invalid server response for Registration");

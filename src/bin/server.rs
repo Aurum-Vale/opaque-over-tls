@@ -210,8 +210,8 @@ impl ServerApp {
         println!("{client_username}");
 
         let reg_req = read_msg(&mut tls_stream).unwrap();
-        println!("Read {}", reg_req.len());
-        println!("{:#?}", String::from_utf8_lossy(&reg_req));
+        // println!("Read {}", reg_req.len());
+        // println!("{:#?}", String::from_utf8_lossy(&reg_req));
 
         if self.credentials_map.contains_key(&client_username) {
             send_msg(&mut tls_stream, b"").unwrap();
@@ -235,8 +235,8 @@ impl ServerApp {
         .unwrap();
 
         let reg_upload = read_msg(&mut tls_stream).unwrap();
-        println!("Read {}", reg_upload.len());
-        println!("{:#?}", String::from_utf8_lossy(&reg_upload));
+        // println!("Read {}", reg_upload.len());
+        // println!("{:#?}", String::from_utf8_lossy(&reg_upload));
 
         let registration_fin =
             RegistrationUpload::<OpaqueCipherSuite>::deserialize(&reg_upload).unwrap();
